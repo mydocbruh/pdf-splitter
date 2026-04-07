@@ -16,11 +16,7 @@
       --danger-bg: #fdeaea; --danger-text: #7a1f1f;
       --radius: 10px; --radius-sm: 6px;
     }
-    body {
-      font-family: 'Georgia', serif; background: var(--bg); color: var(--text);
-      min-height: 100vh; display: flex; flex-direction: column;
-      align-items: center; padding: 2rem 1rem 4rem;
-    }
+    body { font-family: 'Georgia', serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem 4rem; }
     header { text-align: center; margin-bottom: 2rem; }
     .logo { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 0.75rem; }
     .logo-icon { width: 42px; height: 42px; background: var(--accent); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
@@ -47,11 +43,24 @@
     .progress-bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
     .progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
     .progress-label { font-family: system-ui,sans-serif; font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+    .resident-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; max-height: 380px; overflow-y: auto; }
+    .resident-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); transition: background 0.1s; }
+    .resident-row:last-child { border-bottom: none; }
+    .resident-row:hover { background: var(--surface-2); }
+    .resident-num { flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--info-bg); color: var(--info-text); font-family: system-ui,sans-serif; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+    .resident-name-input { flex: 1; font-family: system-ui,sans-serif; font-size: 13px; font-weight: 500; border: 1px solid transparent; background: transparent; color: var(--text); padding: 3px 6px; border-radius: 4px; outline: none; transition: border-color 0.15s; min-width: 0; }
+    .resident-name-input:focus { border-color: var(--accent); background: var(--surface); }
+    .resident-pages { font-family: system-ui,sans-serif; font-size: 12px; color: var(--text-faint); white-space: nowrap; }
+    .badge { font-family: system-ui,sans-serif; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+    .badge-green { background: var(--accent-bg); color: var(--accent-text); }
+    .badge-gray  { background: var(--surface-2); color: var(--text-faint); }
+    .meta-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .meta-label { font-family: system-ui,sans-serif; font-size: 12px; color: var(--text-muted); }
+    .note { font-family: system-ui,sans-serif; font-size: 12px; color: var(--text-faint); margin-top: 8px; text-align: center; }
     footer { margin-top: 2rem; font-family: system-ui,sans-serif; font-size: 12px; color: var(--text-faint); text-align: center; }
     .hidden { display: none !important; }
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .note { font-family: system-ui,sans-serif; font-size: 12px; color: var(--text-faint); margin-top: 8px; text-align: center; }
   </style>
 </head>
 <body>
@@ -61,7 +70,7 @@
     <div class="logo-icon">📋</div>
     <h1>Statement Splitter</h1>
   </div>
-  <p>Drop your monthly resident statement PDF — it will be split into one <strong>original quality</strong> PDF per resident, named automatically.</p>
+  <p>Drop your monthly PDF — review and edit resident names, then download a separate original-quality PDF for each resident.</p>
 </header>
 
 <div class="card">
@@ -82,23 +91,35 @@
   </div>
 </div>
 
-<div class="card hidden" id="action-card">
-  <button class="btn-primary" id="upload-btn" onclick="uploadAndSplit()">
-    Split &amp; Download ZIP
-  </button>
-  <p class="note">Original PDF quality — no image conversion. Names detected from the <em>To:</em> field.</p>
+<div class="card hidden" id="preview-card">
+  <div class="meta-row">
+    <span style="font-family:system-ui,sans-serif;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint);">Detected residents</span>
+    <span class="meta-label" id="meta-label"></span>
+  </div>
+  <div class="resident-list" id="resident-list"></div>
+  <p class="note" style="margin-top:8px;">✏️ Click any name to edit before downloading.</p>
 </div>
 
-<footer>All files are processed securely and never stored on the server.</footer>
+<div class="card hidden" id="warn-card">
+  <p style="font-family:system-ui,sans-serif;font-size:13px;color:var(--warn-text);background:var(--warn-bg);padding:10px 14px;border-radius:6px;line-height:1.5;">
+    ⚠️ <strong>Some names couldn't be detected.</strong> They're labelled "Resident_N" — click to rename before downloading.
+  </p>
+</div>
+
+<div class="card hidden" id="action-card">
+  <button class="btn-primary" id="download-btn" onclick="downloadSplit()">
+    Download all split PDFs as ZIP
+  </button>
+  <p class="note" style="margin-top:8px;">Original PDF quality — text stays sharp and searchable.</p>
+</div>
+
+<footer>Files are processed securely and never stored on the server.</footer>
 
 <script>
-  // ── IMPORTANT: Replace this with your Render backend URL after deploying ──
-  const BACKEND_URL = 'REPLACE_WITH_YOUR_RENDER_URL';
+  const BACKEND_URL = 'https://pdf-splitter-lijp.onrender.com';
 
   let selectedFile = null;
-
-  const dropZone  = document.getElementById('drop-zone');
-  const fileInput = document.getElementById('file-input');
+  let detectedGroups = [];
 
   const $ = id => document.getElementById(id);
   const show = id => $(id).classList.remove('hidden');
@@ -119,16 +140,9 @@
     }
   }
 
-  function handleFile(file) {
-    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
-      showStatus('Please select a PDF file.', 'error');
-      return;
-    }
-    selectedFile = file;
-    showStatus(`✓ <strong>${file.name}</strong> ready — click the button below to split.`, 'success');
-    setProgress(-1);
-    show('action-card');
-  }
+  // ── Drop zone ────────────────────────────────────────────────────────────────
+  const dropZone  = $('drop-zone');
+  const fileInput = $('file-input');
 
   dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
@@ -139,21 +153,95 @@
   dropZone.addEventListener('click', e => { if (e.target.tagName !== 'BUTTON') fileInput.click(); });
   fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
 
-  async function uploadAndSplit() {
-    if (!selectedFile) { showStatus('Please select a PDF first.', 'error'); return; }
+  function handleFile(file) {
+    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+      showStatus('Please select a PDF file.', 'error'); return;
+    }
+    selectedFile = file;
+    hide('preview-card'); hide('action-card'); hide('warn-card');
+    uploadForPreview();
+  }
 
-    const btn = $('upload-btn');
-    btn.innerHTML = '<span class="spinner"></span>Uploading & splitting…';
-    btn.disabled = true;
-    showStatus('Uploading your PDF to the server…', 'info');
+  // ── Step 1: Upload for preview ────────────────────────────────────────────
+  async function uploadForPreview() {
+    showStatus('Scanning PDF for resident names…', 'info');
     setProgress(30, 'Uploading…');
 
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      setProgress(60, 'Splitting PDFs…');
-      showStatus('Splitting PDFs on the server — this may take a few seconds…', 'info');
+      setProgress(60, 'Detecting residents…');
+      const response = await fetch(`${BACKEND_URL}/preview`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Server error');
+      }
+
+      const data = await response.json();
+      detectedGroups = data.groups;
+
+      renderPreview(data.groups, data.total_pages);
+      setProgress(100, 'Done scanning');
+      showStatus(
+        `✓ Found <strong>${data.total_residents} resident${data.total_residents !== 1 ? 's' : ''}</strong> across <strong>${data.total_pages} pages</strong>. Review names below before downloading.`,
+        'success'
+      );
+      setTimeout(() => setProgress(-1), 600);
+
+      if (data.groups.some(g => !g.auto_detected)) show('warn-card');
+      show('action-card');
+
+    } catch(e) {
+      showStatus('⚠️ Error: ' + e.message + '<br><small>If the server is waking up, wait 30 seconds and try again.</small>', 'error');
+      setProgress(-1);
+    }
+  }
+
+  // ── Render resident list ──────────────────────────────────────────────────
+  function renderPreview(groups, totalPages) {
+    $('meta-label').textContent = `${groups.length} residents · ${totalPages} pages`;
+    $('resident-list').innerHTML = groups.map((g, i) => `
+      <div class="resident-row">
+        <div class="resident-num">${i + 1}</div>
+        <input class="resident-name-input" id="name-${i}"
+               value="${(g.name || '').replace(/"/g, '&quot;')}" title="Click to edit" />
+        <span class="resident-pages">
+          ${g.pages.length}p · p${g.pages[0] + 1}${g.pages.length > 1 ? '–' + (g.pages[g.pages.length - 1] + 1) : ''}
+        </span>
+        <span class="badge ${g.auto_detected ? 'badge-green' : 'badge-gray'}">
+          ${g.auto_detected ? 'detected' : 'fallback'}
+        </span>
+      </div>`).join('');
+    show('preview-card');
+  }
+
+  // ── Step 2: Download with edited names ───────────────────────────────────
+  async function downloadSplit() {
+    if (!selectedFile) { showStatus('Please select a PDF first.', 'error'); return; }
+
+    const btn = $('download-btn');
+    btn.innerHTML = '<span class="spinner"></span>Splitting & downloading…';
+    btn.disabled = true;
+
+    // Collect edited names from inputs
+    const names = {};
+    detectedGroups.forEach((g, i) => {
+      const el = $(`name-${i}`);
+      if (el) names[i] = el.value.trim() || g.name;
+    });
+
+    showStatus('Splitting PDFs on the server…', 'info');
+    setProgress(40, 'Splitting…');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('names', JSON.stringify(names));
 
       const response = await fetch(`${BACKEND_URL}/split`, {
         method: 'POST',
@@ -167,28 +255,23 @@
 
       setProgress(90, 'Downloading ZIP…');
       const blob = await response.blob();
-
-      const url = URL.createObjectURL(blob);
-      const a   = document.createElement('a');
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
       a.href = url; a.download = 'resident_statements.zip';
       document.body.appendChild(a); a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
       setProgress(100, 'Done!');
-      showStatus('✓ Done! Your ZIP has been downloaded — each resident has their own PDF named after them.', 'success');
+      showStatus('✓ Done! ZIP downloaded — each resident has their own PDF named after them.', 'success');
       setTimeout(() => setProgress(-1), 1000);
 
     } catch(e) {
-      showStatus(
-        '⚠️ Error: ' + e.message +
-        '<br><small>If the server is waking up, wait 30 seconds and try again.</small>',
-        'error'
-      );
+      showStatus('⚠️ Error: ' + e.message, 'error');
       setProgress(-1);
     }
 
-    btn.innerHTML = 'Split &amp; Download ZIP';
+    btn.innerHTML = 'Download all split PDFs as ZIP';
     btn.disabled = false;
   }
 </script>
