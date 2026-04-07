@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Resident Statement Splitter</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #f7f6f2; --surface: #ffffff; --surface-2: #f0efe9;
+      --border: rgba(0,0,0,0.1); --border-strong: rgba(0,0,0,0.18);
+      --text: #1a1a18; --text-muted: #6b6b67; --text-faint: #9b9b96;
+      --accent: #1a6b4a; --accent-bg: #e6f4ee; --accent-text: #0f4a32;
+      --info-bg: #e8f0fb; --info-text: #1a3f7a;
+      --warn-bg: #fdf3e3; --warn-text: #7a4a10;
+      --danger-bg: #fdeaea; --danger-text: #7a1f1f;
+      --radius: 10px; --radius-sm: 6px;
+    }
+    body {
+      font-family: 'Georgia', serif; background: var(--bg); color: var(--text);
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; padding: 2rem 1rem 4rem;
+    }
+    header { text-align: center; margin-bottom: 2rem; }
+    .logo { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 0.75rem; }
+    .logo-icon { width: 42px; height: 42px; background: var(--accent); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+    header h1 { font-size: 26px; font-weight: normal; letter-spacing: -0.5px; }
+    header p { font-family: system-ui,sans-serif; font-size: 14px; color: var(--text-muted); max-width: 480px; line-height: 1.6; margin: 0.5rem auto 0; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; width: 100%; max-width: 620px; margin-bottom: 1rem; }
+    #drop-zone { border: 2px dashed var(--border-strong); border-radius: var(--radius); padding: 2.5rem 1rem; text-align: center; cursor: pointer; transition: background 0.15s, border-color 0.15s; background: var(--surface-2); }
+    #drop-zone:hover, #drop-zone.dragover { background: var(--accent-bg); border-color: var(--accent); }
+    #drop-zone .icon { font-size: 36px; margin-bottom: 10px; display: block; }
+    #drop-zone h3 { font-family: system-ui,sans-serif; font-size: 15px; font-weight: 500; margin-bottom: 4px; }
+    #drop-zone p { font-family: system-ui,sans-serif; font-size: 13px; color: var(--text-muted); margin-bottom: 14px; }
+    #file-input { display: none; }
+    button { font-family: system-ui,sans-serif; cursor: pointer; border-radius: var(--radius-sm); transition: opacity 0.15s, background 0.15s; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-outline { padding: 7px 18px; font-size: 13px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
+    .btn-outline:hover:not(:disabled) { background: var(--surface-2); }
+    .btn-primary { width: 100%; padding: 12px; font-size: 14px; font-weight: 500; border: none; background: var(--accent); color: #fff; border-radius: var(--radius-sm); }
+    .btn-primary:hover:not(:disabled) { opacity: 0.88; }
+    .status { font-family: system-ui,sans-serif; font-size: 13px; padding: 10px 14px; border-radius: var(--radius-sm); display: none; line-height: 1.6; }
+    .status.info    { background: var(--info-bg);   color: var(--info-text);   display: block; }
+    .status.success { background: var(--accent-bg); color: var(--accent-text); display: block; }
+    .status.error   { background: var(--danger-bg); color: var(--danger-text); display: block; }
+    .progress-wrap { margin-top: 10px; display: none; }
+    .progress-bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+    .progress-label { font-family: system-ui,sans-serif; font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+    footer { margin-top: 2rem; font-family: system-ui,sans-serif; font-size: 12px; color: var(--text-faint); text-align: center; }
+    .hidden { display: none !important; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .note { font-family: system-ui,sans-serif; font-size: 12px; color: var(--text-faint); margin-top: 8px; text-align: center; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">📋</div>
+    <h1>Statement Splitter</h1>
+  </div>
+  <p>Drop your monthly resident statement PDF — it will be split into one <strong>original quality</strong> PDF per resident, named automatically.</p>
+</header>
+
+<div class="card">
+  <div id="drop-zone">
+    <span class="icon">📂</span>
+    <h3>Drag & drop your PDF here</h3>
+    <p>or click to browse from your computer</p>
+    <input type="file" id="file-input" accept=".pdf" />
+    <button class="btn-outline" onclick="document.getElementById('file-input').click()">Browse file</button>
+  </div>
+</div>
+
+<div class="card hidden" id="status-card">
+  <div id="status-msg" class="status"></div>
+  <div class="progress-wrap" id="progress-wrap">
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <div class="progress-label" id="progress-label"></div>
+  </div>
+</div>
+
+<div class="card hidden" id="action-card">
+  <button class="btn-primary" id="upload-btn" onclick="uploadAndSplit()">
+    Split &amp; Download ZIP
+  </button>
+  <p class="note">Original PDF quality — no image conversion. Names detected from the <em>To:</em> field.</p>
+</div>
+
+<footer>All files are processed securely and never stored on the server.</footer>
+
+<script>
+  // ── IMPORTANT: Replace this with your Render backend URL after deploying ──
+  const BACKEND_URL = 'REPLACE_WITH_YOUR_RENDER_URL';
+
+  let selectedFile = null;
+
+  const dropZone  = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+
+  const $ = id => document.getElementById(id);
+  const show = id => $(id).classList.remove('hidden');
+  const hide = id => $(id).classList.add('hidden');
+
+  function showStatus(html, type) {
+    show('status-card');
+    const el = $('status-msg');
+    el.className = 'status ' + type;
+    el.innerHTML = html;
+  }
+
+  function setProgress(pct, label) {
+    $('progress-wrap').style.display = pct >= 0 ? 'block' : 'none';
+    if (pct >= 0) {
+      $('progress-fill').style.width = pct + '%';
+      $('progress-label').textContent = label || '';
+    }
+  }
+
+  function handleFile(file) {
+    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+      showStatus('Please select a PDF file.', 'error');
+      return;
+    }
+    selectedFile = file;
+    showStatus(`✓ <strong>${file.name}</strong> ready — click the button below to split.`, 'success');
+    setProgress(-1);
+    show('action-card');
+  }
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('dragover');
+    handleFile(e.dataTransfer.files[0]);
+  });
+  dropZone.addEventListener('click', e => { if (e.target.tagName !== 'BUTTON') fileInput.click(); });
+  fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+  async function uploadAndSplit() {
+    if (!selectedFile) { showStatus('Please select a PDF first.', 'error'); return; }
+
+    const btn = $('upload-btn');
+    btn.innerHTML = '<span class="spinner"></span>Uploading & splitting…';
+    btn.disabled = true;
+    showStatus('Uploading your PDF to the server…', 'info');
+    setProgress(30, 'Uploading…');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      setProgress(60, 'Splitting PDFs…');
+      showStatus('Splitting PDFs on the server — this may take a few seconds…', 'info');
+
+      const response = await fetch(`${BACKEND_URL}/split`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Server error');
+      }
+
+      setProgress(90, 'Downloading ZIP…');
+      const blob = await response.blob();
+
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement('a');
+      a.href = url; a.download = 'resident_statements.zip';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setProgress(100, 'Done!');
+      showStatus('✓ Done! Your ZIP has been downloaded — each resident has their own PDF named after them.', 'success');
+      setTimeout(() => setProgress(-1), 1000);
+
+    } catch(e) {
+      showStatus(
+        '⚠️ Error: ' + e.message +
+        '<br><small>If the server is waking up, wait 30 seconds and try again.</small>',
+        'error'
+      );
+      setProgress(-1);
+    }
+
+    btn.innerHTML = 'Split &amp; Download ZIP';
+    btn.disabled = false;
+  }
+</script>
+</body>
+</html>
