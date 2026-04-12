@@ -12,9 +12,8 @@ import time
 app = Flask(__name__)
 CORS(app)
 
-# In-memory cache: session_id -> {groups, pdf_bytes, timestamp}
 _cache = {}
-CACHE_TTL = 600  # 10 minutes
+CACHE_TTL = 600
 
 def clean_cache():
     now = time.time()
@@ -23,9 +22,13 @@ def clean_cache():
         del _cache[k]
 
 def extract_client_name(text):
-    """Extract from Client field first, fall back to To: field."""
-    # Client field: "Client AIZIC, DAVID (236024004)"
-    m = re.search(r'Client\s+([A-Za-z][A-Za-z\'\-]+(?:,\s*[A-Za-z][A-Za-z\'\-. ]+)?)\s*\(', text)
+    """
+    Primary: match 'LASTNAME, FIRSTNAME (236024004)' — 9-digit account number
+    always identifies the actual resident, not the billing contact.
+    Fallback: To: field.
+    """
+    # Account numbers in this PDF are always 9 digits e.g. (236024004)
+    m = re.search(r'([A-Za-z][A-Za-z\'\-]+,\s*[A-Za-z][A-Za-z\'\-. ]+)\s*\(\d{9}\)', text)
     if m:
         return m.group(1).strip()
     # Fallback: To: field
@@ -43,7 +46,6 @@ def safe_filename(name):
     return re.sub(r'[\/\\?%*:|"<>]', '-', name).strip()
 
 def scan_groups(pdf_bytes):
-    """Fast scan using pypdf — ~1 second for 145 pages."""
     reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
     total_pages = len(reader.pages)
     groups = []
@@ -51,7 +53,6 @@ def scan_groups(pdf_bytes):
 
     for i in range(total_pages):
         text = reader.pages[i].extract_text() or ""
-
         pm = re.search(r'[Pp]age\s+(\d+)\s+of\s+(\d+)', text)
         page_num = int(pm.group(1)) if pm else None
         page_of  = int(pm.group(2)) if pm else None
@@ -102,7 +103,6 @@ def health():
 
 @app.route('/preview', methods=['POST'])
 def preview_pdf():
-    """Scan PDF, cache result, return groups. Fast — ~1-2 seconds."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     file = request.files['file']
@@ -112,15 +112,12 @@ def preview_pdf():
         clean_cache()
         pdf_bytes = file.read()
         groups, total_pages = scan_groups(pdf_bytes)
-
-        # Cache the scan result + pdf bytes for the download step
         session_id = str(uuid.uuid4())
         _cache[session_id] = {
             'groups': groups,
             'pdf_bytes': pdf_bytes,
             'timestamp': time.time()
         }
-
         return jsonify({
             'session_id': session_id,
             'total_pages': total_pages,
@@ -132,26 +129,23 @@ def preview_pdf():
 
 @app.route('/split', methods=['POST'])
 def split_pdf():
-    """Split using cached scan — no re-upload needed, instant."""
     try:
-        data = request.get_json()
+        data         = request.get_json()
         session_id   = data.get('session_id')
         custom_names = data.get('names', {})
 
         if not session_id or session_id not in _cache:
             return jsonify({'error': 'Session expired — please re-upload your PDF.'}), 400
 
-        cached      = _cache[session_id]
-        pdf_bytes   = cached['pdf_bytes']
-        groups      = cached['groups']
+        cached    = _cache[session_id]
+        pdf_bytes = cached['pdf_bytes']
+        groups    = cached['groups']
 
-        # Apply any edited names from the frontend
         for idx, g in enumerate(groups):
             if str(idx) in custom_names:
                 g['name'] = custom_names[str(idx)]
 
-        # Split natively with pypdf — original quality
-        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        reader     = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -165,9 +159,7 @@ def split_pdf():
                 filename = safe_filename(g['name']) + '.pdf'
                 zf.writestr(filename, pdf_out.read())
 
-        # Clean up cache after download
         del _cache[session_id]
-
         zip_buffer.seek(0)
         return send_file(
             zip_buffer,
@@ -175,7 +167,6 @@ def split_pdf():
             as_attachment=True,
             download_name='resident_statements.zip'
         )
-
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
