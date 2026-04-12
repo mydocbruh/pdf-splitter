@@ -1,30 +1,34 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import pypdf
-import pdfplumber
 import zipfile
 import io
 import re
 import os
 import json
+import uuid
+import time
 
 app = Flask(__name__)
 CORS(app)
 
+# In-memory cache: session_id -> {groups, pdf_bytes, timestamp}
+_cache = {}
+CACHE_TTL = 600  # 10 minutes
+
+def clean_cache():
+    now = time.time()
+    expired = [k for k, v in _cache.items() if now - v['timestamp'] > CACHE_TTL]
+    for k in expired:
+        del _cache[k]
+
 def extract_client_name(text):
-    """
-    Extract resident name. Tries Client field first (most reliable),
-    falls back to To: field.
-    Examples in PDF:
-      "Client AIZIC, DAVID (236024004)"
-      "Client Antman, Miriam (236019040)"
-      "To: Bishop, Lori"
-    """
-    # PRIMARY: Client field — catches all cases in this PDF format
+    """Extract from Client field first, fall back to To: field."""
+    # Client field: "Client AIZIC, DAVID (236024004)"
     m = re.search(r'Client\s+([A-Za-z][A-Za-z\'\-]+(?:,\s*[A-Za-z][A-Za-z\'\-. ]+)?)\s*\(', text)
     if m:
         return m.group(1).strip()
-    # FALLBACK: To: field
+    # Fallback: To: field
     m = re.search(r'To:\s*([A-Za-z][A-Za-z\'\-]+(?:,\s*[A-Za-z][A-Za-z\'\- ]+)?)', text)
     if m:
         name = m.group(1).strip()
@@ -33,67 +37,59 @@ def extract_client_name(text):
     return None
 
 def format_name(raw):
-    """'AIZIC, DAVID' -> 'AIZIC DAVID'"""
     return re.sub(r'\s+', ' ', raw.replace(',', '')).strip()
 
 def safe_filename(name):
     return re.sub(r'[\/\\?%*:|"<>]', '-', name).strip()
 
 def scan_groups(pdf_bytes):
-    """
-    Use pdfplumber for reliable text extraction.
-    Returns (groups, total_pages).
-    """
+    """Fast scan using pypdf — ~1 second for 145 pages."""
+    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    total_pages = len(reader.pages)
     groups = []
     current = None
 
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        total_pages = len(pdf.pages)
+    for i in range(total_pages):
+        text = reader.pages[i].extract_text() or ""
 
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
+        pm = re.search(r'[Pp]age\s+(\d+)\s+of\s+(\d+)', text)
+        page_num = int(pm.group(1)) if pm else None
+        page_of  = int(pm.group(2)) if pm else None
+        is_first = (not pm) or (page_num == 1)
 
-            # Detect Page X of Y
-            pm = re.search(r'[Pp]age\s+(\d+)\s+of\s+(\d+)', text)
-            page_num = int(pm.group(1)) if pm else None
-            page_of  = int(pm.group(2)) if pm else None
-            is_first = (not pm) or (page_num == 1)
+        raw_name    = extract_client_name(text)
+        client_name = format_name(raw_name) if raw_name else None
 
-            raw_name    = extract_client_name(text)
-            client_name = format_name(raw_name) if raw_name else None
-
-            if is_first:
-                if current:
-                    groups.append(current)
+        if is_first:
+            if current:
+                groups.append(current)
+            current = {
+                'name': client_name,
+                'pages': [i],
+                'total_expected': page_of or 1,
+                'auto_detected': bool(client_name)
+            }
+        else:
+            if current:
+                current['pages'].append(i)
+                if client_name and not current['name']:
+                    current['name'] = client_name
+                    current['auto_detected'] = True
+            else:
                 current = {
                     'name': client_name,
                     'pages': [i],
                     'total_expected': page_of or 1,
                     'auto_detected': bool(client_name)
                 }
-            else:
-                if current:
-                    current['pages'].append(i)
-                    if client_name and not current['name']:
-                        current['name'] = client_name
-                        current['auto_detected'] = True
-                else:
-                    current = {
-                        'name': client_name,
-                        'pages': [i],
-                        'total_expected': page_of or 1,
-                        'auto_detected': bool(client_name)
-                    }
 
-        if current:
-            groups.append(current)
+    if current:
+        groups.append(current)
 
-    # Fallback: one group per page
     if not groups:
         groups = [{'name': None, 'pages': [i], 'total_expected': 1, 'auto_detected': False}
                   for i in range(total_pages)]
 
-    # Assign fallback names
     for idx, g in enumerate(groups):
         if not g['name']:
             g['name'] = f'Resident_{idx + 1}'
@@ -106,16 +102,27 @@ def health():
 
 @app.route('/preview', methods=['POST'])
 def preview_pdf():
-    """Scan PDF and return resident groups without splitting."""
+    """Scan PDF, cache result, return groups. Fast — ~1-2 seconds."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     file = request.files['file']
     if not file.filename.lower().endswith('.pdf'):
         return jsonify({'error': 'File must be a PDF'}), 400
     try:
+        clean_cache()
         pdf_bytes = file.read()
         groups, total_pages = scan_groups(pdf_bytes)
+
+        # Cache the scan result + pdf bytes for the download step
+        session_id = str(uuid.uuid4())
+        _cache[session_id] = {
+            'groups': groups,
+            'pdf_bytes': pdf_bytes,
+            'timestamp': time.time()
+        }
+
         return jsonify({
+            'session_id': session_id,
             'total_pages': total_pages,
             'total_residents': len(groups),
             'groups': groups
@@ -125,28 +132,25 @@ def preview_pdf():
 
 @app.route('/split', methods=['POST'])
 def split_pdf():
-    """Split PDF into one file per resident and return as ZIP."""
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-    file = request.files['file']
-    if not file.filename.lower().endswith('.pdf'):
-        return jsonify({'error': 'File must be a PDF'}), 400
+    """Split using cached scan — no re-upload needed, instant."""
     try:
-        pdf_bytes = file.read()
+        data = request.get_json()
+        session_id   = data.get('session_id')
+        custom_names = data.get('names', {})
 
-        # Get custom names from frontend (edited by user)
-        custom_names = {}
-        if 'names' in request.form:
-            custom_names = json.loads(request.form['names'])
+        if not session_id or session_id not in _cache:
+            return jsonify({'error': 'Session expired — please re-upload your PDF.'}), 400
 
-        groups, total_pages = scan_groups(pdf_bytes)
+        cached      = _cache[session_id]
+        pdf_bytes   = cached['pdf_bytes']
+        groups      = cached['groups']
 
-        # Apply any edited names
+        # Apply any edited names from the frontend
         for idx, g in enumerate(groups):
             if str(idx) in custom_names:
                 g['name'] = custom_names[str(idx)]
 
-        # Split using pypdf (native — original quality)
+        # Split natively with pypdf — original quality
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         zip_buffer = io.BytesIO()
 
@@ -160,6 +164,9 @@ def split_pdf():
                 pdf_out.seek(0)
                 filename = safe_filename(g['name']) + '.pdf'
                 zf.writestr(filename, pdf_out.read())
+
+        # Clean up cache after download
+        del _cache[session_id]
 
         zip_buffer.seek(0)
         return send_file(
