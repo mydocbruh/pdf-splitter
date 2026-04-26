@@ -40,7 +40,10 @@ def extract_client_name(text):
     return None
 
 def format_name(raw):
-    return re.sub(r'\s+', ' ', raw.replace(',', '')).strip()
+    # Normalize spacing around comma, then apply Title Case
+    name = re.sub(r'\s*,\s*', ', ', raw)
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name.title()  # 'AIZIC, DAVID' -> 'Aizic, David'
 
 def safe_filename(name):
     return re.sub(r'[\/\\?%*:|"<>]', '-', name).strip()
